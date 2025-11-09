@@ -26,6 +26,7 @@ from models import (
     serialize_route,
 )
 from data_engineering.ais_processor import AISDataProcessor, GeospatialGraphBuilder
+from data_engineering.maritime_graph_builder import create_maritime_network
 from optimization_engine.optimizer import WeightedAStarOptimizer
 from agents.monitoring_agent import DeviationMonitoringAgent, CongestionBlockageDetector
 from agents.forecasting_agent import CongestionForecastingAgent
@@ -49,8 +50,8 @@ app.add_middleware(
 )
 
 # Composants globaux
-graph_builder: Optional[GeospatialGraphBuilder] = None
 optimizer: Optional[WeightedAStarOptimizer] = None
+waypoints_dict: Optional[Dict[str, WayPoint]] = None
 monitoring_agent: Optional[DeviationMonitoringAgent] = None
 forecasting_agent: Optional[CongestionForecastingAgent] = None
 blockage_detector: Optional[CongestionBlockageDetector] = None
@@ -114,180 +115,32 @@ class VesselPositionUpdate(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialise les composants au démarrage"""
-    global graph_builder, optimizer, monitoring_agent, forecasting_agent, blockage_detector
+    global optimizer, waypoints_dict, monitoring_agent, forecasting_agent, blockage_detector
     
-    logger.info(f"Démarrage de {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info(f"🚀 Démarrage de {settings.APP_NAME} v{settings.APP_VERSION}")
     
     try:
-        # 1. Charger et traiter les données AIS (DONNÉES RÉELLES)
-        logger.info("Chargement des données AIS réelles...")
-        try:
-            ais_processor = AISDataProcessor(settings.AIS_DATA_PATH)
-            ais_data = ais_processor.load_ais_data()
-            ais_processor.create_voyage_segments()
-            edge_stats = ais_processor.compute_edge_statistics()
-            logger.info(f"✓ {len(ais_data)} points AIS chargés")
-            logger.info(f"✓ {len(edge_stats)} routes maritimes identifiées")
-        except FileNotFoundError:
-            logger.warning(f"Fichier AIS non trouvé: {settings.AIS_DATA_PATH}")
-            edge_stats = {}
+        # Créer le réseau maritime réaliste avec tous les waypoints et routes
+        logger.info("🌍 Construction du réseau maritime réaliste...")
+        graph, wp_dict = create_maritime_network()
+        waypoints_dict = wp_dict
         
-        # 2. Construire le graphe géospatial à partir des VRAIES DONNÉES AIS
-        logger.info("Construction du graphe à partir des données AIS...")
-        graph_builder = GeospatialGraphBuilder()
+        logger.info(f"✅ Réseau créé: {graph.number_of_nodes()} nœuds, {graph.number_of_edges()} arêtes")
         
-        # Ajouter les ports principaux comme nœuds de départ/arrivée
-        main_ports = [
-            WayPoint("PORT_SG", "Singapore", 1.3521, 103.8198, "port", capacity=5000),
-            WayPoint("PORT_HH", "Hamburg", 53.3495, 9.9878, "port", capacity=4000),
-            WayPoint("PORT_SH", "Shanghai", 31.2304, 121.4737, "port", capacity=6000),
-            WayPoint("PORT_PA", "Panama", 8.9824, -79.5199, "port", capacity=3000),
-            WayPoint("PORT_LA", "Los Angeles", 33.7425, -118.2073, "port", capacity=4500),
-            WayPoint("PORT_RO", "Rotterdam", 51.9225, 4.1115, "port", capacity=3500),
-        ]
+        # Initialiser l'optimiseur avec le graphe réaliste
+        optimizer = WeightedAStarOptimizer(graph, waypoints_dict)
+        logger.info("✅ Optimiseur A* pondéré initialisé")
         
-        for port in main_ports:
-            graph_builder.add_waypoint(port)
-        
-        # Ajouter les waypoints intermédiaires (carrefours maritimes clés)
-        intermediate_waypoints = [
-            WayPoint("WP_MALACCA", "Detroit Malacca", 2.6, 104.5, "chokepoint"),
-            WayPoint("WP_SUEZ", "Canal de Suez", 29.9, 32.6, "chokepoint"),
-            WayPoint("WP_GIBRALTAR", "Détroit de Gibraltar", 36.1, -5.4, "chokepoint"),
-            WayPoint("WP_PANAMA_CANAL", "Canal Panama", 9.0, -79.5, "chokepoint"),
-            WayPoint("WP_HONG_KONG", "Hong Kong", 22.3, 114.2, "waypoint"),
-            WayPoint("WP_COLOMBO", "Port Colombo", 6.9, 79.8, "waypoint"),
-            WayPoint("WP_DJIBOUTI", "Port Djibouti", 11.6, 43.1, "waypoint"),
-        ]
-        
-        for wp in intermediate_waypoints:
-            graph_builder.add_waypoint(wp)
-        
-        # Créer les arêtes à partir des données AIS réelles
-        logger.info("Intégration des routes maritimes observées (données AIS)...")
-        from models import EdgeAttributes, RiskLevel
-        
-        # Ajouter les arêtes basées sur les observations AIS
-        added_edges = set()
-        for edge_key, stats in edge_stats.items():
-            from_point, to_point = edge_key
-            
-            # Trouver le waypoint le plus proche pour chaque point
-            from_wp = graph_builder.get_waypoint_by_proximity(from_point[0], from_point[1], radius_nm=100)
-            to_wp = graph_builder.get_waypoint_by_proximity(to_point[0], to_point[1], radius_nm=100)
-            
-            if from_wp and to_wp and (from_wp.id, to_wp.id) not in added_edges:
-                edge_attrs = EdgeAttributes(
-                    distance_nm=stats['distance_nm'],
-                    time_hours_avg=stats['time_hours_avg'],
-                    fuel_consumption_tons=stats['fuel_consumption_tons'],
-                    weather_risk=RiskLevel.LOW,
-                    piracy_risk=RiskLevel.MEDIUM,  # Navigation maritime = risques modérés
-                    navigability=True,
-                    blocked=False,
-                )
-                
-                graph_builder.add_edge_from_ais(from_wp, to_wp, edge_attrs)
-                added_edges.add((from_wp.id, to_wp.id))
-        
-        # Ajouter les routes maritimes de base (connexions entre ports/waypoints)
-        logger.info("Ajout des routes maritimes de base...")
-        from math import radians, cos, sin, asin, sqrt
-        
-        def haversine(lat1, lon1, lat2, lon2):
-            lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-            dlon = lon2 - lon1
-            dlat = lat2 - lat1
-            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-            c = 2 * asin(sqrt(a))
-            return c * 3440.065
-        
-        # Routes maritimes stratégiques
-        strategic_routes = [
-            ("PORT_SG", "WP_MALACCA"), ("WP_MALACCA", "WP_COLOMBO"),
-            ("WP_COLOMBO", "WP_DJIBOUTI"), ("WP_DJIBOUTI", "WP_SUEZ"),
-            ("WP_SUEZ", "WP_GIBRALTAR"), ("WP_GIBRALTAR", "PORT_RO"),
-            ("WP_GIBRALTAR", "PORT_HH"),
-            ("PORT_SG", "WP_HONG_KONG"), ("WP_HONG_KONG", "PORT_SH"),
-            ("PORT_SH", "WP_HONG_KONG"),
-            ("PORT_LA", "WP_PANAMA_CANAL"), ("WP_PANAMA_CANAL", "PORT_PA"),
-            ("PORT_PA", "PORT_HH"),
-        ]
-        
-        for from_id, to_id in strategic_routes:
-            from_wp = graph_builder.waypoints.get(from_id)
-            to_wp = graph_builder.waypoints.get(to_id)
-            
-            if from_wp and to_wp and (from_id, to_id) not in added_edges:
-                distance_nm = haversine(from_wp.latitude, from_wp.longitude,
-                                       to_wp.latitude, to_wp.longitude)
-                time_hours = distance_nm / 15.0
-                fuel_tons = distance_nm * 0.015
-                
-                # Risques élevés près des détroits/canaux
-                piracy_risk = RiskLevel.HIGH if "Suez" in to_wp.name or "Panama" in to_wp.name else RiskLevel.MEDIUM
-                
-                edge_attrs = EdgeAttributes(
-                    distance_nm=distance_nm,
-                    time_hours_avg=time_hours,
-                    fuel_consumption_tons=fuel_tons,
-                    weather_risk=RiskLevel.MEDIUM,
-                    piracy_risk=piracy_risk,
-                    navigability=True,
-                    blocked=False,
-                )
-                
-                graph_builder.add_edge_from_ais(from_wp, to_wp, edge_attrs)
-                added_edges.add((from_id, to_id))
-        
-        # Connexions directes entre ports pour alternative routing
-        logger.info("Ajout des routes alternatives...")
-        for i, from_wp in enumerate(main_ports):
-            for to_wp in main_ports[i+1:]:
-                if (from_wp.id, to_wp.id) not in added_edges:
-                    distance_nm = haversine(from_wp.latitude, from_wp.longitude,
-                                           to_wp.latitude, to_wp.longitude)
-                    
-                    # Limiter aux routes raisonnables (< 12000 NM)
-                    if distance_nm > 12000:
-                        continue
-                    
-                    time_hours = distance_nm / 15.0
-                    fuel_tons = distance_nm * 0.015
-                    
-                    edge_attrs = EdgeAttributes(
-                        distance_nm=distance_nm,
-                        time_hours_avg=time_hours,
-                        fuel_consumption_tons=fuel_tons,
-                        weather_risk=RiskLevel.MEDIUM,
-                        piracy_risk=RiskLevel.LOW,
-                        navigability=True,
-                        blocked=False,
-                    )
-                    
-                    graph_builder.add_edge_from_ais(from_wp, to_wp, edge_attrs)
-                    added_edges.add((from_wp.id, to_wp.id))
-        
-        logger.info(f"✓ Graphe finalisé: {graph_builder.get_graph_statistics()}")
-        logger.info(f"  - Nombre d'arêtes créées: {len(added_edges)}")
-        
-        # 3. Créer l'optimiseur
-        logger.info("Initialisation de l'optimiseur...")
-        optimizer = WeightedAStarOptimizer(
-            graph_builder.get_graph(),
-            graph_builder.waypoints
-        )
-        
-        # 4. Initialiser les agents
+        # Initialiser les agents
         monitoring_agent = DeviationMonitoringAgent(optimizer, max_deviation_km=50.0)
         forecasting_agent = CongestionForecastingAgent()
         blockage_detector = CongestionBlockageDetector()
+        logger.info("✅ Agents initialisés")
         
-        logger.info("✓ Tous les composants initialisés avec succès")
-        logger.info(f"Graphe: {graph_builder.get_graph_statistics()}")
+        logger.info("✅ Tous les composants démarrés avec succès!\n")
         
     except Exception as e:
-        logger.error(f"Erreur lors du démarrage: {e}", exc_info=True)
+        logger.error(f"❌ Erreur lors du démarrage: {e}", exc_info=True)
         raise
 
 
@@ -315,8 +168,8 @@ async def health_check():
 @app.get(f"{settings.API_PREFIX}/waypoints")
 async def get_waypoints():
     """Retourne la liste des waypoints/ports disponibles"""
-    if not graph_builder:
-        raise HTTPException(status_code=503, detail="Graph builder not initialized")
+    if not waypoints_dict:
+        raise HTTPException(status_code=503, detail="Waypoints not initialized")
     
     waypoints = [
         {
@@ -325,9 +178,9 @@ async def get_waypoints():
             "latitude": wp.latitude,
             "longitude": wp.longitude,
             "port_type": wp.port_type,
-            "capacity": wp.capacity,
+            "risk_level": wp.risk_level.name,
         }
-        for wp in graph_builder.waypoints.values()
+        for wp in waypoints_dict.values()
     ]
     
     return {"waypoints": waypoints}
@@ -342,7 +195,7 @@ async def optimize_route(request: OptimizationRequest):
     Input: Navire, ports de départ/arrivée, paramètres d'optimisation
     Output: Route optimisée
     """
-    if not optimizer or not graph_builder:
+    if not optimizer or not waypoints_dict:
         raise HTTPException(status_code=503, detail="Optimizer not initialized")
     
     try:
@@ -579,10 +432,10 @@ async def select_best_port(primary_port: str, alternatives: List[str], arrival_d
 @app.get(f"{settings.API_PREFIX}/system/status")
 async def system_status():
     """Status du système"""
-    if graph_builder:
-        graph_stats = graph_builder.get_graph_statistics()
-    else:
-        graph_stats = {}
+    graph_stats = {
+        "nodes": len(waypoints_dict) if waypoints_dict else 0,
+        "waypoints": list(waypoints_dict.keys()) if waypoints_dict else []
+    }
     
     return {
         "app": settings.APP_NAME,
