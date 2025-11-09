@@ -178,7 +178,6 @@ async def get_waypoints():
             "latitude": wp.latitude,
             "longitude": wp.longitude,
             "port_type": wp.port_type,
-            "risk_level": wp.risk_level.name,
         }
         for wp in waypoints_dict.values()
     ]
