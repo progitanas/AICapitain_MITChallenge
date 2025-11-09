@@ -1,0 +1,152 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+.yarn/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.vscode/settings.json
+.vscode/launch.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.production.local
+secrets/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Docker
+.docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.tmp/
+temp/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE specific
+.vscode/
+.idea/
+*.iml
+
+# Frontend
+frontend/.vite/
+frontend/dist/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Backend  
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.coverage
+backend/htmlcov/
+
+# OS specific
+.DS_Store
+*.pem
+*.key
+*.crt
+
+# CI/CD
+.github/workflows/.DS_Store
+
+# Uploads
+uploads/
+temp/
+cache/
+
+# Backups
+*.backup
+*.bak
+*.backup.*
+
+# OS locks
+.~lock.*
+
+# IDEs
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# Package managers
+package-lock.json~
+yarn.lock
+pnpm-lock.yaml
+
+# Misc
+.tern-port
